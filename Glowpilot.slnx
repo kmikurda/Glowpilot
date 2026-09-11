@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/shared.tests/">
+    <Project Path="shared.tests/Glowpilot.Shared.Tests.csproj" />
+  </Folder>
+  <Folder Name="/shared/">
+    <Project Path="shared/Glowpilot.Shared.csproj" />
+  </Folder>
+</Solution>
