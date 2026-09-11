@@ -1,4 +1,10 @@
 <Solution>
+  <Folder Name="/adapters/claude-code/">
+    <Project Path="adapters/claude-code/Glowpilot.Adapters.ClaudeCode.csproj" />
+  </Folder>
+  <Folder Name="/adapters/claude-code.tests/">
+    <Project Path="adapters/claude-code.tests/Glowpilot.Adapters.ClaudeCode.Tests.csproj" />
+  </Folder>
   <Folder Name="/shared.tests/">
     <Project Path="shared.tests/Glowpilot.Shared.Tests.csproj" />
   </Folder>
