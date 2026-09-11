@@ -5,4 +5,10 @@
   <Folder Name="/shared/">
     <Project Path="shared/Glowpilot.Shared.csproj" />
   </Folder>
+  <Folder Name="/service/">
+    <Project Path="service/Glowpilot.Service.csproj" />
+  </Folder>
+  <Folder Name="/service.tests/">
+    <Project Path="service.tests/Glowpilot.Service.Tests.csproj" />
+  </Folder>
 </Solution>
