@@ -5,6 +5,12 @@
   <Folder Name="/adapters/claude-code.tests/">
     <Project Path="adapters/claude-code.tests/Glowpilot.Adapters.ClaudeCode.Tests.csproj" />
   </Folder>
+  <Folder Name="/adapters/copilot/">
+    <Project Path="adapters/copilot/Glowpilot.Adapters.CopilotCli.csproj" />
+  </Folder>
+  <Folder Name="/adapters/copilot.tests/">
+    <Project Path="adapters/copilot.tests/Glowpilot.Adapters.CopilotCli.Tests.csproj" />
+  </Folder>
   <Folder Name="/shared.tests/">
     <Project Path="shared.tests/Glowpilot.Shared.Tests.csproj" />
   </Folder>
