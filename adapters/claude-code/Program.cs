@@ -11,9 +11,10 @@ try
 {
     var json = await Console.In.ReadToEndAsync();
 
-    var node       = JsonNode.Parse(json) ?? throw new InvalidOperationException("null JSON");
-    var sessionId  = node["session_id"]?.GetValue<string>()  ?? string.Empty;
-    var eventName  = node["hook_event_name"]?.GetValue<string>() ?? string.Empty;
+    var node      = JsonNode.Parse(json) ?? throw new InvalidOperationException("Empty JSON payload.");
+    var sessionId = node["session_id"]?.GetValue<string>()      ?? string.Empty;
+    var eventName = node["hook_event_name"]?.GetValue<string>()
+                    ?? throw new InvalidOperationException("Missing required field: hook_event_name.");
 
     var (state, closed) = HookPayloadMapper.Map(eventName);
 

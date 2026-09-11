@@ -10,16 +10,16 @@ public static class HookPayloadMapper
     /// <summary>
     /// Maps a hook_event_name string to a (SessionState, closed) tuple.
     /// </summary>
-    /// <param name="hookEventName">The value of the hook_event_name field from the Claude Code payload.</param>
+    /// <param name="sessionEventName">The value of the hook_event_name field from the Claude Code payload.</param>
     /// <returns>The matching SessionState and whether the session should be marked as closed.</returns>
-    /// <exception cref="ArgumentException">Thrown for unknown hook event names.</exception>
-    public static (SessionState State, bool Closed) Map(string hookEventName) =>
-        hookEventName switch
+    /// <exception cref="ArgumentException">Thrown for unknown session event names.</exception>
+    public static (SessionState State, bool Closed) Map(string sessionEventName) =>
+        sessionEventName switch
         {
             "PreToolUse"   => (SessionState.Working, false),
             "PostToolUse"  => (SessionState.Working, false),
             "Notification" => (SessionState.Blocked,  false),
             "Stop"         => (SessionState.Idle,     true),
-            _              => throw new ArgumentException($"Unknown hook event: {hookEventName}", nameof(hookEventName))
+            _              => throw new ArgumentException($"Unknown session event: {sessionEventName}", nameof(sessionEventName))
         };
 }
