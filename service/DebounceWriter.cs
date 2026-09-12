@@ -15,6 +15,9 @@ public sealed class DebounceWriter : IDeviceWriter, IDisposable
 
     public const int DebounceMs = 200;
 
+    /// <summary>Delegates connection state to the underlying writer.</summary>
+    public bool IsConnected => _inner.IsConnected;
+
     public DebounceWriter(IDeviceWriter inner)
     {
         _inner = inner;

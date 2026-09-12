@@ -23,6 +23,8 @@ public sealed class FakeTimeProvider : TimeProvider
 /// </summary>
 public sealed class MockDeviceWriter : IDeviceWriter
 {
+    public bool IsConnected => false;
+
     private readonly ConcurrentQueue<WireFrame> _writes = new();
     private WireFrame? _lastWrite;
 

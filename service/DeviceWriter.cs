@@ -8,6 +8,9 @@ namespace Glowpilot.Service;
 public interface IDeviceWriter
 {
     void Write(WireFrame frame);
+
+    /// <summary>Whether the underlying Device is currently connected.</summary>
+    bool IsConnected { get; }
 }
 
 /// <summary>

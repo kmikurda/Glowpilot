@@ -57,21 +57,31 @@ public sealed class SessionService : IHostedService, IDisposable
         else
             _map.Upsert(evt);
 
-        _writer.Write(_map.ComputeRingState());
+        _writer.Write(WithNoSessionsColor(_map.ComputeRingState()));
     }
 
     /// <summary>Evicts stale sessions and recomputes the Ring State.</summary>
     public void EvictStale()
     {
         _map.EvictStale(TimeSpan.FromMinutes(_config.StaleTimeoutMinutes));
-        _writer.Write(_map.ComputeRingState());
+        _writer.Write(WithNoSessionsColor(_map.ComputeRingState()));
     }
 
     // Private ─────────────────────────────────────────────────────────────────
 
     /// <summary>Periodic write of the current Ring State — keeps the Device in sync
     /// even when no Session Events have arrived.</summary>
-    private void WriteCurrentRingState() => _writer.Write(_map.ComputeRingState());
+    private void WriteCurrentRingState() => _writer.Write(WithNoSessionsColor(_map.ComputeRingState()));
+
+    /// <summary>
+    /// Attaches the configured No-Sessions color to a NoSessions frame so the Device
+    /// can render the correct slow-pulse color without hardcoding it in the firmware.
+    /// Non-NoSessions frames are returned unchanged.
+    /// </summary>
+    private WireFrame WithNoSessionsColor(WireFrame frame) =>
+        frame.State == RingState.NoSessions
+            ? frame with { Color = _config.NoSessionsColor }
+            : frame;
 
     private void DisposeTimers()
     {

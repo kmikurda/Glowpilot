@@ -6,9 +6,12 @@ namespace Glowpilot.Service;
 public interface ISessionMapConfig
 {
     int StaleTimeoutMinutes { get; }
+
+    /// <summary>Color displayed by the Device when Ring State is No-Sessions.</summary>
+    string NoSessionsColor { get; }
 }
 
-public sealed record SessionMapConfig(int StaleTimeoutMinutes) : ISessionMapConfig;
+public sealed record SessionMapConfig(int StaleTimeoutMinutes, string NoSessionsColor = "#0044FF") : ISessionMapConfig;
 
 internal sealed record SessionEntry(string Tool, SessionState State, DateTimeOffset LastSeen);
 
@@ -68,9 +71,16 @@ public sealed class SessionMap
         return new WireFrame(RingState.Idle, idle.Tool);
     }
 
-    /// <summary>Returns a snapshot of all sessions (for the /status debug endpoint).</summary>
-    public IReadOnlyDictionary<string, object> GetAll() =>
-        _sessions.ToDictionary(
-            kvp => kvp.Key,
-            kvp => (object)new { kvp.Value.Tool, State = kvp.Value.State.ToString(), kvp.Value.LastSeen });
+    /// <summary>Returns a snapshot of all sessions (for the /status endpoint).</summary>
+    public IReadOnlyList<SessionStatusEntry> GetAll() =>
+        _sessions
+            .Select(kvp => new SessionStatusEntry
+            {
+                SessionId = kvp.Key,
+                Tool      = kvp.Value.Tool,
+                State     = kvp.Value.State,
+                LastSeen  = kvp.Value.LastSeen
+            })
+            .ToList()
+            .AsReadOnly();
 }
