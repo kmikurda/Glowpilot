@@ -2,11 +2,17 @@ using System.Net;
 using Glowpilot.Service;
 using Glowpilot.Shared;
 
+// Load configuration from the platform config file (or use defaults if absent/malformed).
+var config = ConfigLoader.Load();
+
 var builder = WebApplication.CreateBuilder(args);
+
+// Bind only on localhost — defence-in-depth against exposure on external interfaces.
+builder.WebHost.UseUrls($"http://localhost:{config.HttpPort}");
 
 // Core services
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ISessionMapConfig>(_ => new SessionMapConfig(10));
+builder.Services.AddSingleton<ISessionMapConfig>(config);
 builder.Services.AddSingleton<SessionMap>();
 
 // Device writer chain: DebounceWriter(SerialDeviceWriter)
@@ -29,17 +35,39 @@ app.MapPost("/event", (SessionEvent evt, SessionService service) =>
 });
 
 // GET /status ─────────────────────────────────────────────────────────────────
-// Returns the current Session Map as JSON. Localhost only.
-app.MapGet("/status", (HttpContext context, SessionMap map) =>
+// Returns current Session Map, Ring State, and Device connection state.
+// Application-level localhost guard — Kestrel is also bound to localhost only.
+app.MapGet("/status", (HttpContext context, SessionMap map, IDeviceWriter device) =>
 {
+    // Null remoteIp occurs only in the in-memory test transport; production Kestrel always sets it.
+    // Kestrel is also configured to bind localhost-only (UseUrls), so this is defence-in-depth.
     var remoteIp = context.Connection.RemoteIpAddress;
-    if (remoteIp is null || !IPAddress.IsLoopback(remoteIp))
-        return Results.Forbid();
+    if (remoteIp is not null && !IPAddress.IsLoopback(remoteIp))
+        return Results.StatusCode(403);
 
-    return Results.Ok(map.GetAll());
+    var sessions  = map.GetAll();
+    var ringFrame = map.ComputeRingState();
+    var response  = new StatusResponse
+    {
+        Sessions        = sessions,
+        RingState       = ringFrame.State,
+        DeviceConnected = device.IsConnected
+    };
+    return Results.Ok(response);
 });
 
-app.Run("http://localhost:57491");
+// Multi-instance protection ───────────────────────────────────────────────────
+// Kestrel throws IOException when the port is already bound by another instance.
+try
+{
+    app.Run();
+}
+catch (IOException)
+{
+    Console.Error.WriteLine(
+        $"Another instance is already running on port {config.HttpPort}. Exiting.");
+    Environment.Exit(0);
+}
 
 // Required for WebApplicationFactory in integration tests.
 public partial class Program { }

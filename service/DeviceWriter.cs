@@ -5,6 +5,9 @@ namespace Glowpilot.Service;
 public interface IDeviceWriter
 {
     void Write(WireFrame frame);
+
+    /// <summary>Whether the underlying Device is currently connected.</summary>
+    bool IsConnected { get; }
 }
 
 /// <summary>
@@ -14,6 +17,9 @@ public interface IDeviceWriter
 /// </summary>
 public sealed class SerialDeviceWriter : IDeviceWriter
 {
+    /// <summary>Always false until USB serial is implemented (issue #7).</summary>
+    public bool IsConnected => false;
+
     public void Write(WireFrame frame)
     {
         throw new NotImplementedException("USB serial write is not yet implemented (issue #7).");
