@@ -1,29 +1,26 @@
 // Glowpilot — LED ring renderer
-// All 7 LEDs always show the same color.
-// Fade: linear interpolation over FADE_MS when state changes.
-// Pulse: sinusoidal brightness modulation for BOOT / NO_SESSIONS states.
+//
+// Animations per ring state:
+//   WORKING     — spinning dot with 2-LED trailing tail (amber, clockwise)
+//   BLOCKED     — fast sinusoidal pulse, all LEDs (red — signals user action needed)
+//   IDLE        — solid, all LEDs (green — done, waiting for input)
+//   NO_SESSIONS — slow sinusoidal pulse, all LEDs (blue)
+//   BOOT        — slow sinusoidal pulse, all LEDs (blue, before first connection)
+//
+// State changes trigger a per-LED cross-fade from the previous output snapshot.
 
 #include "leds.h"
 #include <math.h>
 
-static CRGB  leds[LED_COUNT];
-
-// Fade tracking
-static CRGB     fadeFrom   = CRGB::Black;
-static CRGB     fadeTo     = CRGB::Black;
-static uint32_t fadeStart  = 0;
-static bool     inFade     = false;
-
-// Current resolved color (post-fade, pre-pulse)
-static CRGB     currentColor = CRGB::Black;
-
-// Current state (for pulse detection)
+static CRGB      leds[LED_COUNT];
+static CRGB      fadePrev[LED_COUNT];
+static uint32_t  fadeStart   = 0;
+static bool      inFade      = false;
 static RingState currentState = RingState::BOOT;
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helper
 
-// Linear interpolate two CRGB values, blend in [0,255] (0=a, 255=b)
 static CRGB lerpColor(CRGB a, CRGB b, uint8_t blend) {
     return CRGB(
         a.r + (((int16_t)b.r - a.r) * blend) / 255,
@@ -32,82 +29,116 @@ static CRGB lerpColor(CRGB a, CRGB b, uint8_t blend) {
     );
 }
 
-// Apply sinusoidal pulse: brightness oscillates between ~10% and 100%
-static CRGB applyPulse(CRGB base) {
-    float phase = (float)(millis() % PULSE_PERIOD) / (float)PULSE_PERIOD; // 0..1
-    float sineVal = sinf(phase * 2.0f * (float)M_PI);  // -1..1
-    float brightness = 0.55f + 0.45f * sineVal;         // 0.1..1.0
-    return CRGB(
-        (uint8_t)(base.r * brightness),
-        (uint8_t)(base.g * brightness),
-        (uint8_t)(base.b * brightness)
-    );
+// ---------------------------------------------------------------------------
+// Target computation — fills out[LED_COUNT] with the desired colors for the
+// current state at the current moment in time (millis()).
+
+static void computeTarget(CRGB* out) {
+    CRGB base = colorForState(currentState);
+
+    switch (currentState) {
+
+        case RingState::WORKING: {
+            // One dot travels clockwise; two LEDs behind it form a fading tail.
+            // spinPos is the fractional LED position of the dot head (0 .. LED_COUNT).
+            float spinPos = (float)(millis() % SPIN_PERIOD_MS)
+                            / (float)SPIN_PERIOD_MS
+                            * (float)LED_COUNT;
+            for (uint8_t i = 0; i < LED_COUNT; i++) {
+                // Angular distance *behind* the head (0 = head, increases clockwise).
+                float dist = fmodf((float)LED_COUNT + spinPos - (float)i, (float)LED_COUNT);
+                if (dist < 1.0f) {
+                    out[i] = base;                                      // head: full
+                } else if (dist < 3.0f) {
+                    float t = 1.0f - (dist - 1.0f) / 2.0f;            // tail: linear fade
+                    out[i] = CRGB((uint8_t)(base.r * t),
+                                  (uint8_t)(base.g * t),
+                                  (uint8_t)(base.b * t));
+                } else {
+                    out[i] = CRGB::Black;                               // dark
+                }
+            }
+            break;
+        }
+
+        case RingState::BLOCKED: {
+            // Fast sinusoidal pulse — all LEDs identical brightness.
+            float phase      = (float)(millis() % BLINK_PERIOD_MS) / (float)BLINK_PERIOD_MS;
+            float brightness = 0.1f + 0.9f * (0.5f + 0.5f * sinf(phase * 2.0f * (float)M_PI));
+            CRGB  c = CRGB((uint8_t)(base.r * brightness),
+                           (uint8_t)(base.g * brightness),
+                           (uint8_t)(base.b * brightness));
+            for (uint8_t i = 0; i < LED_COUNT; i++) out[i] = c;
+            break;
+        }
+
+        case RingState::IDLE: {
+            // Solid — no animation. All LEDs at full color.
+            for (uint8_t i = 0; i < LED_COUNT; i++) out[i] = base;
+            break;
+        }
+
+        case RingState::NO_SESSIONS:
+        case RingState::BOOT:
+        default: {
+            // Slow sinusoidal pulse — soft ambient presence, not urgent.
+            float phase      = (float)(millis() % PULSE_PERIOD_MS) / (float)PULSE_PERIOD_MS;
+            float brightness = 0.1f + 0.9f * (0.5f + 0.5f * sinf(phase * 2.0f * (float)M_PI));
+            CRGB  c = CRGB((uint8_t)(base.r * brightness),
+                           (uint8_t)(base.g * brightness),
+                           (uint8_t)(base.b * brightness));
+            for (uint8_t i = 0; i < LED_COUNT; i++) out[i] = c;
+            break;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 
 void ledsInit() {
     FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, LED_COUNT);
-    FastLED.setBrightness(255); // full brightness so output matches spec-mandated color values
+    FastLED.setBrightness(255);
     FastLED.clear(true);
 
-    // Immediately begin boot animation
     currentState = RingState::BOOT;
-    currentColor = CRGB::Black;
-    fadeFrom     = CRGB::Black;
-    fadeTo       = colorForState(RingState::BOOT);
-    fadeStart    = millis();
-    inFade       = true;
-}
-
-void ledsSetState(RingState newState) {
-    if (newState == RingState::UNKNOWN) return; // keep current
-
-    if (newState == currentState && !inFade) return; // no change
-
-    currentState = newState;
-
-    // Snapshot current displayed color as fade origin
-    if (inFade) {
-        uint32_t elapsed = millis() - fadeStart;
-        uint8_t blend = (elapsed >= FADE_MS) ? 255
-                                             : (uint8_t)((elapsed * 255UL) / FADE_MS);
-        fadeFrom = lerpColor(fadeFrom, fadeTo, blend);
-    } else {
-        fadeFrom = currentColor;
+    for (uint8_t i = 0; i < LED_COUNT; i++) {
+        fadePrev[i] = CRGB::Black;
+        leds[i]     = CRGB::Black;
     }
-
-    fadeTo    = colorForState(newState);
     fadeStart = millis();
     inFade    = true;
 }
 
+void ledsSetState(RingState newState) {
+    if (newState == RingState::UNKNOWN) return;
+    if (newState == currentState && !inFade) return;
+
+    // Snapshot the currently displayed output as the fade origin.
+    for (uint8_t i = 0; i < LED_COUNT; i++) fadePrev[i] = leds[i];
+
+    currentState = newState;
+    fadeStart    = millis();
+    inFade       = true;
+}
+
 void ledsUpdate() {
-    CRGB displayColor;
+    CRGB target[LED_COUNT];
+    computeTarget(target);
 
     if (inFade) {
         uint32_t elapsed = millis() - fadeStart;
         if (elapsed >= FADE_MS) {
-            inFade       = false;
-            currentColor = fadeTo;
-            displayColor = fadeTo;
+            inFade = false;
+            for (uint8_t i = 0; i < LED_COUNT; i++) leds[i] = target[i];
         } else {
             uint8_t blend = (uint8_t)((elapsed * 255UL) / FADE_MS);
-            displayColor  = lerpColor(fadeFrom, fadeTo, blend);
-            currentColor  = displayColor;
+            for (uint8_t i = 0; i < LED_COUNT; i++) {
+                leds[i] = lerpColor(fadePrev[i], target[i], blend);
+            }
         }
     } else {
-        displayColor = currentColor;
+        for (uint8_t i = 0; i < LED_COUNT; i++) leds[i] = target[i];
     }
 
-    // Apply pulse overlay for pulsing states
-    if (isPulsingState(currentState)) {
-        displayColor = applyPulse(displayColor);
-    }
-
-    // Write the same color to every LED
-    for (uint8_t i = 0; i < LED_COUNT; i++) {
-        leds[i] = displayColor;
-    }
     FastLED.show();
 }

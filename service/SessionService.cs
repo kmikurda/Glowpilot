@@ -63,7 +63,9 @@ public sealed class SessionService : IHostedService, IDisposable
     /// <summary>Evicts stale sessions and recomputes the Ring State.</summary>
     public void EvictStale()
     {
-        _map.EvictStale(TimeSpan.FromMinutes(_config.StaleTimeoutMinutes));
+        _map.EvictStale(
+            TimeSpan.FromMinutes(_config.StaleTimeoutMinutes),
+            TimeSpan.FromSeconds(_config.IdleStaleTimeoutSeconds));
         _writer.Write(WithNoSessionsColor(_map.ComputeRingState()));
     }
 

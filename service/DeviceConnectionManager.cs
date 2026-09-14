@@ -11,8 +11,10 @@ namespace Glowpilot.Service;
 /// </summary>
 public sealed class DeviceConnectionManager : BackgroundService
 {
-    private const ushort VendorId  = 0x2886;   // Seeed Studio
-    private const ushort ProductId = 0x0045;
+    // XIAO ESP32-C3 uses the Espressif hardware USB JTAG/Serial controller whose
+    // VID/PID are fixed in silicon and cannot be overridden by firmware build flags.
+    private const ushort VendorId  = 0x303A;   // Espressif Systems
+    private const ushort ProductId = 0x1001;
 
     private readonly IUsbDeviceLocator _locator;
     private readonly ISerialDeviceConnection _connection;

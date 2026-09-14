@@ -18,8 +18,8 @@ public static class HookPayloadMapper
         {
             "PreToolUse"   => (SessionState.Working, false),
             "PostToolUse"  => (SessionState.Working, false),
-            "Notification" => (SessionState.Blocked,  false),
-            "Stop"         => (SessionState.Idle,     true),
+            "Notification" => (SessionState.Idle,    false),
+            "Stop"         => (SessionState.Idle,     false),
             _              => throw new ArgumentException($"Unknown session event: {sessionEventName}", nameof(sessionEventName))
         };
 }

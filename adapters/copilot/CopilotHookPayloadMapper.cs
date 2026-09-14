@@ -20,7 +20,7 @@ public static class CopilotHookPayloadMapper
             "agent:tool_call"         => (SessionState.Working, false),
             "agent:tool_result"       => (SessionState.Working, false),
             "agent:waiting_for_input" => (SessionState.Blocked, false),
-            "agent:done"              => (SessionState.Idle,    true),
+            "agent:done"              => (SessionState.Idle,    false),
             _                         => (SessionState.Working, false)
         };
 }

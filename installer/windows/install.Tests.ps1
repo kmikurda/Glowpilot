@@ -3,10 +3,11 @@
 .SYNOPSIS
     Pester v5 tests for install.ps1 helper functions.
 .DESCRIPTION
-    Tests three public seams:
-      1. Test-DotNetVersion  — parses dotnet --version output
-      2. Merge-ClaudeHooks   — idempotent JSON merge for Claude settings
-      3. Register-GlowpilotTask — Task Scheduler registration parameters
+    Tests four public seams:
+      1. Test-DotNetVersion        — parses dotnet --version output
+      2. Merge-ClaudeHooks         — idempotent JSON merge for Claude settings
+      3. Register-GlowpilotTask    — Task Scheduler registration parameters
+      4. Install-CopilotHooks      — writes glowpilot.json to ~/.copilot/hooks/
 
     Run with:  Invoke-Pester -Path install.Tests.ps1 -Output Detailed
     Requires:  Pester >= 5.0  (Install-Module Pester -MinimumVersion 5.0)
@@ -76,7 +77,9 @@ Describe 'Test-DotNetVersion' {
 Describe 'Merge-ClaudeHooks' {
 
     BeforeAll {
-        $ExePath = 'C:\Users\test\AppData\Local\Glowpilot\bin\claude-code\glowpilot-claude-code.exe'
+        $ExePath     = 'C:\Users\test\AppData\Local\Glowpilot\bin\claude-code\glowpilot-claude-code.exe'
+        # Merge-ClaudeHooks converts the Windows path to MSYS2 format for Claude Code (Git Bash).
+        $ExePathMsys = '/c/Users/test/AppData/Local/Glowpilot/bin/claude-code/glowpilot-claude-code.exe'
     }
 
     Context 'when the config is empty or does not exist' {
@@ -90,12 +93,12 @@ Describe 'Merge-ClaudeHooks' {
             $obj.hooks.Stop         | Should -Not -BeNullOrEmpty
         }
 
-        It 'sets the correct exe command in every hook entry' {
+        It 'stores the command as a MSYS2 path (required by Claude Code Git-Bash hooks)' {
             $result = Merge-ClaudeHooks -ConfigJson '' -AdapterExePath $ExePath
             $obj    = $result | ConvertFrom-Json
 
             foreach ($eventType in @('PreToolUse', 'PostToolUse', 'Notification', 'Stop')) {
-                $obj.hooks.$eventType[0].hooks[0].command | Should -Be $ExePath
+                $obj.hooks.$eventType[0].hooks[0].command | Should -Be $ExePathMsys
             }
         }
 
@@ -170,19 +173,19 @@ Describe 'Merge-ClaudeHooks' {
             $obj.hooks.PreToolUse.Count | Should -Be 2
             # The original entry is first
             $obj.hooks.PreToolUse[0].matcher | Should -Be 'mytool'
-            # Our entry is appended
-            $obj.hooks.PreToolUse[1].hooks[0].command | Should -Be $ExePath
+            # Our entry is appended (stored as MSYS2 path)
+            $obj.hooks.PreToolUse[1].hooks[0].command | Should -Be $ExePathMsys
         }
 
         It 'does not duplicate when our exe already appears nested in an existing entry' {
-            # Edge case: our exe is already a hook inside some other entry
+            # Edge case: our exe is already a hook inside some other entry (MSYS2 path, as stored by the function).
             $existing = @{
                 hooks = @{
                     PreToolUse = @(
                         @{
                             matcher = 'combined'
                             hooks   = @(
-                                @{ type = 'command'; command = $ExePath }
+                                @{ type = 'command'; command = $ExePathMsys }
                             )
                         }
                     )
@@ -203,11 +206,11 @@ Describe 'Merge-ClaudeHooks' {
 # ────────────────────────────────────────────────────────────────────────────
 Describe 'Register-GlowpilotTask' {
     <#
-    Strategy: New-ScheduledTaskAction / New-ScheduledTaskTrigger /
-    New-ScheduledTaskSettingsSet are pure in-memory factory cmdlets with no
-    system side effects, so they run for real and return proper CimInstance
-    objects that satisfy Register-ScheduledTask's type constraints.
-    Only Register-ScheduledTask (which writes to Task Scheduler) is mocked.
+    Strategy: Register-GlowpilotTask uses XML-based registration so that the
+    trigger's <Repetition> block can be set (CIM trigger objects do not expose
+    those properties as settable). Only Register-ScheduledTask (which writes to
+    Task Scheduler) is mocked; everything else runs for real and returns the
+    XML string that we can inspect in ParameterFilter.
     #>
 
     BeforeAll {
@@ -227,22 +230,19 @@ Describe 'Register-GlowpilotTask' {
         }
     }
 
-    It 'passes the service exe path in the Action' {
+    It 'embeds the service exe path in the XML action' {
         Register-GlowpilotTask -ServiceExePath $ServiceExe
 
-        # The Action is a real CimInstance from New-ScheduledTaskAction;
-        # its Execute property carries the path we passed in.
         Should -Invoke Register-ScheduledTask -Times 1 -ParameterFilter {
-            # CimInstance exposes properties as PS NoteProperties
-            ($Action | ForEach-Object { $_.Execute }) -eq $ServiceExe
+            $Xml -like "*<Command>$ServiceExe</Command>*"
         }
     }
 
-    It 'sets RunLevel to Limited (no UAC required)' {
+    It 'sets RunLevel to LeastPrivilege (no UAC required)' {
         Register-GlowpilotTask -ServiceExePath $ServiceExe
 
         Should -Invoke Register-ScheduledTask -Times 1 -ParameterFilter {
-            $RunLevel -eq 'Limited'
+            $Xml -like '*<RunLevel>LeastPrivilege</RunLevel>*'
         }
     }
 
@@ -258,5 +258,115 @@ Describe 'Register-GlowpilotTask' {
         Register-GlowpilotTask -ServiceExePath $ServiceExe
 
         Should -Invoke Register-ScheduledTask -Times 1
+    }
+
+    It 'sets a 1-minute repetition interval so the service self-heals while logged in' {
+        Register-GlowpilotTask -ServiceExePath $ServiceExe
+
+        Should -Invoke Register-ScheduledTask -Times 1 -ParameterFilter {
+            $Xml -like '*<Interval>PT1M</Interval>*'
+        }
+    }
+
+    It 'disables StopAtDurationEnd so the repetition runs indefinitely' {
+        Register-GlowpilotTask -ServiceExePath $ServiceExe
+
+        Should -Invoke Register-ScheduledTask -Times 1 -ParameterFilter {
+            $Xml -like '*<StopAtDurationEnd>false</StopAtDurationEnd>*'
+        }
+    }
+
+    It 'includes a wake-from-sleep EventTrigger (Kernel-Power EventID 107)' {
+        Register-GlowpilotTask -ServiceExePath $ServiceExe
+
+        Should -Invoke Register-ScheduledTask -Times 1 -ParameterFilter {
+            $Xml -like '*EventTrigger*' -and $Xml -like '*EventID=107*'
+        }
+    }
+
+    It 'uses IgnoreNew to suppress duplicate instances during repetition checks' {
+        Register-GlowpilotTask -ServiceExePath $ServiceExe
+
+        Should -Invoke Register-ScheduledTask -Times 1 -ParameterFilter {
+            $Xml -like '*<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>*'
+        }
+    }
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# Seam 4: Install-CopilotHooks
+# ────────────────────────────────────────────────────────────────────────────
+Describe 'Install-CopilotHooks' {
+
+    BeforeAll {
+        $AdapterExe = 'C:\Users\test\AppData\Local\Glowpilot\bin\copilot\glowpilot-copilot.exe'
+        # Use a temp directory to avoid touching the real ~/.copilot/hooks/ during tests.
+        $TempHome = Join-Path $TestDrive 'fakehome'
+    }
+
+    BeforeEach {
+        # Reset the temp home before each test.
+        if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        New-Item -ItemType Directory -Path $TempHome -Force | Out-Null
+        # Override $env:USERPROFILE so Install-CopilotHooks writes to the temp dir.
+        $env:USERPROFILE = $TempHome
+    }
+
+    AfterAll {
+        # Restore USERPROFILE after the Describe block.
+        $env:USERPROFILE = $env:SystemRoot -replace '\\Windows$', "\Users\$env:USERNAME"
+    }
+
+    It 'creates the hooks directory if it does not exist' {
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+        $expected = Join-Path $TempHome '.copilot\hooks'
+        Test-Path $expected | Should -BeTrue
+    }
+
+    It 'writes glowpilot.json to the correct location' {
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+        $file = Join-Path $TempHome '.copilot\hooks\glowpilot.json'
+        Test-Path $file | Should -BeTrue
+    }
+
+    It 'produces valid JSON with version 1' {
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+        $file    = Join-Path $TempHome '.copilot\hooks\glowpilot.json'
+        $content = Get-Content $file -Raw
+        $obj     = $content | ConvertFrom-Json
+        $obj.version | Should -Be 1
+    }
+
+    It 'embeds the adapter path (backslashes JSON-escaped) in every hook command' {
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+        $file    = Join-Path $TempHome '.copilot\hooks\glowpilot.json'
+        $content = Get-Content $file -Raw
+        # The path must appear with doubled backslashes (JSON escaping).
+        $content | Should -Match 'glowpilot-copilot\.exe'
+        $content | Should -Match 'C:\\\\Users\\\\test'
+    }
+
+    It 'includes all required hook event types' {
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+        $file    = Join-Path $TempHome '.copilot\hooks\glowpilot.json'
+        $content = Get-Content $file -Raw
+        $obj     = $content | ConvertFrom-Json
+
+        $obj.hooks.sessionStart        | Should -Not -BeNullOrEmpty
+        $obj.hooks.userPromptSubmitted | Should -Not -BeNullOrEmpty
+        $obj.hooks.preToolUse          | Should -Not -BeNullOrEmpty
+        $obj.hooks.postToolUse         | Should -Not -BeNullOrEmpty
+        $obj.hooks.permissionRequest   | Should -Not -BeNullOrEmpty
+        $obj.hooks.agentStop           | Should -Not -BeNullOrEmpty
+        $obj.hooks.sessionEnd          | Should -Not -BeNullOrEmpty
+    }
+
+    It 'is idempotent: running twice does not throw and still produces one file' {
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+        Install-CopilotHooks -AdapterExePath $AdapterExe
+
+        $dir   = Join-Path $TempHome '.copilot\hooks'
+        $files = @(Get-ChildItem $dir -Filter '*.json')
+        $files.Count | Should -Be 1
     }
 }

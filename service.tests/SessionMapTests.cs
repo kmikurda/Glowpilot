@@ -147,4 +147,50 @@ public class SessionMapTests
         var frame = map.ComputeRingState();
         Assert.Equal(RingState.Working, frame.State);
     }
+
+    // ── EvictStale with per-state idle timeout ────────────────────────────────
+
+    [Fact]
+    public void EvictStale_IdleSessionPastIdleTimeout_IsEvicted()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var map = new SessionMap(fakeTime);
+        map.Upsert(Evt("A", SessionState.Idle));
+
+        fakeTime.Advance(TimeSpan.FromSeconds(90));
+
+        map.EvictStale(TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(60));
+
+        Assert.Equal(RingState.NoSessions, map.ComputeRingState().State);
+    }
+
+    [Fact]
+    public void EvictStale_IdleSessionWithinIdleTimeout_IsKept()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var map = new SessionMap(fakeTime);
+        map.Upsert(Evt("A", SessionState.Idle));
+
+        fakeTime.Advance(TimeSpan.FromSeconds(30));
+
+        map.EvictStale(TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(60));
+
+        Assert.Equal(RingState.Idle, map.ComputeRingState().State);
+    }
+
+    [Fact]
+    public void EvictStale_WorkingSessionPastIdleTimeoutButWithinDefault_IsKept()
+    {
+        // Working session outlives the idle timeout — only evicted by the default timeout.
+        var fakeTime = new FakeTimeProvider();
+        var map = new SessionMap(fakeTime);
+        map.Upsert(Evt("A", SessionState.Working));
+
+        fakeTime.Advance(TimeSpan.FromSeconds(90));
+
+        map.EvictStale(TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(60));
+
+        Assert.Equal(RingState.Working, map.ComputeRingState().State);
+    }
+
 }

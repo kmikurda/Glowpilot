@@ -13,6 +13,9 @@ public sealed record GlowpilotConfig : ISessionMapConfig
     public int StaleTimeoutMinutes { get; init; } = 10;
 
     /// <inheritdoc />
+    public int IdleStaleTimeoutSeconds { get; init; } = 300;
+
+    /// <inheritdoc />
     public string NoSessionsColor { get; init; } = "#0044FF";
 
     /// <summary>TCP port on which the Service HTTP server listens.</summary>

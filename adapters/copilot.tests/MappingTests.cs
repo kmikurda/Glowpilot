@@ -42,12 +42,14 @@ public class MappingTests
     }
 
     [Fact]
-    public void AgentDone_MapsTo_Idle_Closed()
+    public void AgentDone_MapsTo_Idle_NotClosed()
     {
+        // Done means the agent finished — session is idle (green LED), not removed.
+        // Stale-timeout eviction cleans it up after IdleStaleTimeoutSeconds of inactivity.
         var (state, closed) = CopilotHookPayloadMapper.Map("agent:done");
 
         Assert.Equal(SessionState.Idle, state);
-        Assert.True(closed);
+        Assert.False(closed);
     }
 
     [Fact]

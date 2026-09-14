@@ -7,10 +7,17 @@
     Steps performed:
       1. Verify .NET 8+ SDK is present
       2. Publish self-contained win-x64 binaries to %LOCALAPPDATA%\Glowpilot\bin\
-      3. Register a user-level Task Scheduler task (AtLogOn, RunLevel Limited)
-      4. Merge Claude Code hook entries into %APPDATA%\Claude\settings.json
-      5. Start the scheduled task
-      6. Smoke-test GET http://localhost:57491/status (timeout: 10 s)
+      3. Register a user-level Task Scheduler task (AtLogOn + wake-from-sleep trigger + 1-min repetition, RunLevel Limited)
+      4. Merge Claude Code hook entries into %USERPROFILE%\.claude\settings.json
+      5. Install Copilot CLI user-level hooks into %USERPROFILE%\.copilot\hooks\glowpilot.json
+      6. Start the scheduled task
+      7. Smoke-test GET http://localhost:57491/status (timeout: 10 s)
+
+    The scheduled task combines an AtLogOn trigger, a wake-from-sleep event trigger, and a
+    1-minute repetition interval.  This means the service is always available: it starts at
+    logon and after every sleep/hibernate resume, and self-heals within one minute if it ever
+    stops unexpectedly.  The service exits immediately when the port is already bound, so
+    duplicate instances are never a problem.
 .EXAMPLE
     PowerShell -ExecutionPolicy Bypass -File install.ps1
 #>
@@ -84,12 +91,19 @@ function Merge-ClaudeHooks {
     }
 
     # ── 3. Build the hook entry to inject ─────────────────────────────────
+    # Claude Code on Windows runs hooks via MSYS2/Git Bash. The path must use
+    # the MSYS2 format: drive letter lowercased and prefixed with '/', backslashes
+    # replaced with forward slashes. e.g. C:\foo\bar.exe → /c/foo/bar.exe
+    $driveLetter = $AdapterExePath[0].ToString().ToLower()
+    $rest        = $AdapterExePath.Substring(3).Replace('\', '/')
+    $adapterExeMsys = "/$driveLetter/$rest"
+
     $newEntry = [PSCustomObject]@{
         matcher = ''
         hooks   = @(
             [PSCustomObject]@{
                 type    = 'command'
-                command = $AdapterExePath
+                command = $adapterExeMsys
             }
         )
     }
@@ -114,7 +128,7 @@ function Merge-ClaudeHooks {
         foreach ($entry in $existingArray) {
             if ($null -eq $entry.hooks) { continue }
             foreach ($hook in @($entry.hooks)) {
-                if ($hook.command -eq $AdapterExePath) {
+                if ($hook.command -eq $adapterExeMsys) {
                     $alreadyRegistered = $true
                     break
                 }
@@ -131,11 +145,77 @@ function Merge-ClaudeHooks {
     return $config | ConvertTo-Json -Depth 10
 }
 
+function Install-CopilotHooks {
+    <#
+    .SYNOPSIS
+        Writes Glowpilot hook definitions to the user's Copilot CLI hooks directory.
+    .PARAMETER AdapterExePath
+        Absolute path to glowpilot-copilot.exe (the Copilot adapter binary).
+    .NOTES
+        Uses the native Copilot CLI file-hooks system (~/.copilot/hooks/) which
+        does not require any feature flags.  Each hook pipes a fixed JSON payload
+        to the adapter, using "copilot" as the session ID (native hook stdin does
+        not carry a session ID).  Idempotent: overwrites on each run.
+    #>
+    param(
+        [string]$AdapterExePath
+    )
+
+    $hooksDir = Join-Path $env:USERPROFILE '.copilot\hooks'
+
+    if (-not (Test-Path $hooksDir)) {
+        New-Item -ItemType Directory -Path $hooksDir -Force | Out-Null
+    }
+
+    # Double backslashes for JSON string escaping; the path appears inside a
+    # PowerShell single-quoted string, so backslashes need no further escaping
+    # at the PS level — only JSON escaping is required here.
+    $jsonPath = $AdapterExePath.Replace('\', '\\')
+
+    $hookFile = Join-Path $hooksDir 'glowpilot.json'
+
+    $content = @"
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:thinking\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "userPromptSubmitted": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:thinking\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "preToolUse": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:tool_call\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "postToolUse": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:tool_result\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "postToolUseFailure": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:tool_result\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "permissionRequest": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:waiting_for_input\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "agentStop": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:done\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ],
+    "sessionEnd": [
+      { "type": "command", "powershell": "'{ \"session_id\": \"copilot\", \"event\": \"agent:done\" }' | & '$jsonPath'", "timeoutSec": 5 }
+    ]
+  }
+}
+"@
+
+    Set-Content -Path $hookFile -Value $content -Encoding UTF8NoBOM
+}
+
 function Register-GlowpilotTask {
     <#
     .SYNOPSIS
         Registers (or replaces) the "Glowpilot" Task Scheduler task.
-        Runs at log-on for the current user; no UAC required (RunLevel Limited).
+        Runs at log-on and on every wake-from-sleep for the current user; no UAC required (RunLevel Limited).
+        A 1-minute repetition keeps the service alive throughout the session —
+        if it ever stops (screen unlock, unexpected exit), it restarts within a minute.
     .PARAMETER ServiceExePath
         Absolute path to Glowpilot.Service.exe.
     #>
@@ -143,23 +223,63 @@ function Register-GlowpilotTask {
         [string]$ServiceExePath
     )
 
-    $action   = New-ScheduledTaskAction -Execute $ServiceExePath
+    # PowerShell's CIM-based trigger objects do not expose Repetition sub-properties
+    # as settable. We use XML registration instead — it gives full control over the
+    # trigger's <Repetition> block and the MultipleInstancesPolicy setting.
+    $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
-    $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    # ISO 8601 durations: PT1M = 1 minute, PT0S = no execution time limit.
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Glowpilot session tracker — starts at logon, self-heals every minute.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>$userId</UserId>
+      <Repetition>
+        <Interval>PT1M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </LogonTrigger>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="System"&gt;&lt;Select Path="System"&gt;*[System[Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=107]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$userId</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$ServiceExePath</Command>
+    </Exec>
+  </Actions>
+</Task>
+"@
 
-    # Restart up to 3 times with a 1-minute interval; no execution time limit.
-    $settings = New-ScheduledTaskSettingsSet `
-        -RestartCount 3 `
-        -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit ([TimeSpan]::Zero)
-
-    Register-ScheduledTask `
-        -TaskName 'Glowpilot' `
-        -Action   $action `
-        -Trigger  $trigger `
-        -Settings $settings `
-        -RunLevel Limited `
-        -Force
+    Register-ScheduledTask -TaskName 'Glowpilot' -Xml $xml -Force
 }
 
 function Test-ServiceHealth {
@@ -203,14 +323,14 @@ function Invoke-GlowpilotInstall {
     )
 
     $binRoot    = Join-Path $env:LOCALAPPDATA 'Glowpilot\bin'
-    $claudeConf = Join-Path $env:APPDATA      'Claude\settings.json'
+    $claudeConf = Join-Path $env:USERPROFILE   '.claude\settings.json'
 
     Write-Host ''
     Write-Host '=== Glowpilot Installer for Windows ===' -ForegroundColor Cyan
     Write-Host ''
 
     # ── Step 0: prerequisite — .NET SDK ─────────────────────────────────────
-    Write-Host '[0/5] Checking prerequisites...'
+    Write-Host '[0/6] Checking prerequisites...'
     if (-not (Test-DotNetVersion)) {
         Write-Host '[FAIL] .NET 8 SDK or later is required.' -ForegroundColor Red
         Write-Host '       Download: https://dot.net/download' -ForegroundColor Yellow
@@ -220,7 +340,7 @@ function Invoke-GlowpilotInstall {
 
     # ── Step 1: publish self-contained binaries ──────────────────────────────
     Write-Host ''
-    Write-Host '[1/5] Publishing binaries (self-contained, win-x64, Release)...'
+    Write-Host '[1/6] Publishing binaries (self-contained, win-x64, Release)...'
 
     $projects = @(
         @{
@@ -251,7 +371,7 @@ function Invoke-GlowpilotInstall {
 
     # ── Step 2: Task Scheduler registration ─────────────────────────────────
     Write-Host ''
-    Write-Host '[2/5] Registering Task Scheduler task...'
+    Write-Host '[2/6] Registering Task Scheduler task...'
     $serviceExe = Join-Path $binRoot 'service\Glowpilot.Service.exe'
     try {
         Register-GlowpilotTask -ServiceExePath $serviceExe
@@ -263,7 +383,7 @@ function Invoke-GlowpilotInstall {
 
     # ── Step 3: Claude Code hook configuration ───────────────────────────────
     Write-Host ''
-    Write-Host '[3/5] Merging Claude Code hook configuration...'
+    Write-Host '[3/6] Merging Claude Code hook configuration...'
 
     $adapterExe   = Join-Path $binRoot 'claude-code\glowpilot-claude-code.exe'
     $existingJson = ''
@@ -282,9 +402,17 @@ function Invoke-GlowpilotInstall {
     Set-Content -Path $claudeConf -Value $mergedJson -Encoding UTF8
     Write-Host "[OK]  Hooks written to $claudeConf" -ForegroundColor Green
 
-    # ── Step 4: start the service ────────────────────────────────────────────
+    # ── Step 4: Copilot CLI user-level hooks ─────────────────────────────────
     Write-Host ''
-    Write-Host '[4/5] Starting Glowpilot service...'
+    Write-Host '[4/6] Installing Copilot CLI user-level hooks...'
+    $copilotAdapter  = Join-Path $binRoot 'copilot\glowpilot-copilot.exe'
+    $copilotHookFile = Join-Path $env:USERPROFILE '.copilot\hooks\glowpilot.json'
+    Install-CopilotHooks -AdapterExePath $copilotAdapter
+    Write-Host "[OK]  Hooks written to $copilotHookFile" -ForegroundColor Green
+
+    # ── Step 5: start the service ────────────────────────────────────────────
+    Write-Host ''
+    Write-Host '[5/6] Starting Glowpilot service...'
     try {
         Start-ScheduledTask -TaskName 'Glowpilot'
         Write-Host '[OK]  Task started.' -ForegroundColor Green
@@ -294,11 +422,11 @@ function Invoke-GlowpilotInstall {
         exit 1
     }
 
-    # ── Step 5: smoke test ───────────────────────────────────────────────────
+    # ── Step 6: smoke test ───────────────────────────────────────────────────
     # A smoke-test timeout is not a critical failure: the service may still be
     # starting (AV scan, slow disk). Installation itself succeeded. Report only.
     Write-Host ''
-    Write-Host '[5/5] Smoke-testing service (GET /status, timeout 10 s)...'
+    Write-Host '[6/6] Smoke-testing service (GET /status, timeout 10 s)...'
     if (Test-ServiceHealth) {
         Write-Host '[OK]  Service responded HTTP 200 at http://localhost:57491/status' -ForegroundColor Green
     } else {
@@ -311,9 +439,11 @@ function Invoke-GlowpilotInstall {
 
     Write-Host ''
     Write-Host '=== Installation complete! ===' -ForegroundColor Cyan
-    Write-Host "    Service binary : $serviceExe"
-    Write-Host "    Claude adapter : $adapterExe"
-    Write-Host "    Config file    : $claudeConf"
+    Write-Host "    Service binary   : $serviceExe"
+    Write-Host "    Claude adapter   : $adapterExe"
+    Write-Host "    Claude config    : $claudeConf"
+    Write-Host "    Copilot adapter  : $copilotAdapter"
+    Write-Host "    Copilot hook file: $copilotHookFile"
     Write-Host ''
 }
 
