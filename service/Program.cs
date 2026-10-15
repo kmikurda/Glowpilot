@@ -2,10 +2,27 @@ using System.Net;
 using Glowpilot.Service;
 using Glowpilot.Shared;
 
+// File log — the Service runs windowless (no console), so this is where its diagnostics go.
+// Created before the config is loaded so a malformed config file is reported too; the file
+// itself is only opened once the first entry is written.
+var fileLog = new FileLoggerProvider(FileLoggerProvider.DefaultDirectory);
+var log = fileLog.CreateLogger("Program");
+
+// A throwing timer callback or background thread would otherwise kill the process without a
+// trace — Task Scheduler just starts it again a minute later.
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    log.LogCritical(e.ExceptionObject as Exception, "Unhandled exception — service is terminating");
+
 // Load configuration from the platform config file (or use defaults if absent/malformed).
-var config = ConfigLoader.Load();
+var config = ConfigLoader.Load(log);
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Logging: level from config; ASP.NET's per-request chatter stays at Warning. Registered through a
+// factory so the container owns (and disposes) the provider.
+builder.Logging.SetMinimumLevel(FileLoggerProvider.ParseLevel(config.LogLevel));
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+builder.Services.AddSingleton<ILoggerProvider>(_ => fileLog);
 
 // Bind only on localhost — defence-in-depth against exposure on external interfaces.
 builder.WebHost.UseUrls($"http://localhost:{config.HttpPort}");
@@ -73,6 +90,8 @@ app.MapGet("/status", (HttpContext context, SessionMap map, IDeviceWriter device
 
 // Multi-instance protection ───────────────────────────────────────────────────
 // Kestrel throws IOException when the port is already bound by another instance.
+app.Logger.LogInformation("Starting Glowpilot service (pid {Pid}) with {Config}", Environment.ProcessId, config);
+
 try
 {
     app.Run();
@@ -81,6 +100,7 @@ catch (IOException)
 {
     Console.Error.WriteLine(
         $"Another instance is already running on port {config.HttpPort}. Exiting.");
+    log.LogWarning("Another instance is already running on port {Port}. Exiting.", config.HttpPort);
     Environment.Exit(0);
 }
 

@@ -4,6 +4,7 @@ using Glowpilot.Shared;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Glowpilot.Service.Tests;
 
@@ -18,6 +19,10 @@ public sealed class ServiceFactory : WebApplicationFactory<Program>
     {
         builder.ConfigureServices(services =>
         {
+            // Program.cs attaches the file logger; a test host must not write into the real log
+            // file that an installed Service may be using.
+            services.AddLogging(logging => logging.ClearProviders());
+
             // Replace production TimeProvider with controllable fake
             ReplaceDescriptor<TimeProvider>(services, _ => FakeTime);
 
@@ -70,6 +75,11 @@ public class SessionPipelineTests : IDisposable
         await PostEvent(new SessionEvent("A", "claude", SessionState.Blocked));
         await PostEvent(new SessionEvent("B", "claude", SessionState.Working));
 
+        // Advance past the 3-second Blocked debounce window, then post another event
+        // to trigger a ring-state recompute with the updated clock.
+        _factory.FakeTime.Advance(TimeSpan.FromSeconds(4));
+        await PostEvent(new SessionEvent("B", "claude", SessionState.Working));
+
         await WaitForDebounce();
 
         var lastWrite = _factory.MockWriter.LastWrite;
@@ -93,7 +103,25 @@ public class SessionPipelineTests : IDisposable
         Assert.Equal(RingState.Working, lastWrite.State);
     }
 
-    // ── 3. NoSessions test ───────────────────────────────────────────────────
+    // ── 3. Copilot regression: session must stay Idle after agent:done ───────
+    // Root cause: agent:done was mapped to (Idle, Closed:true), which removed
+    // the session immediately, causing NoSessions (blue) instead of Idle (green).
+    // Fixed by mapping to (Idle, Closed:false) so the session persists as Idle.
+
+    [Fact]
+    public async Task Idle_WorkingSessionTransitionsToIdle_MockReceivesIdle()
+    {
+        await PostEvent(new SessionEvent("copilot", "copilot", SessionState.Working));
+        await PostEvent(new SessionEvent("copilot", "copilot", SessionState.Idle));
+
+        await WaitForDebounce();
+
+        var lastWrite = _factory.MockWriter.LastWrite;
+        Assert.NotNull(lastWrite);
+        Assert.Equal(RingState.Idle, lastWrite.State);
+    }
+
+    // ── 5. NoSessions test ───────────────────────────────────────────────────
 
     [Fact]
     public async Task NoSessions_AfterAllSessionsEvicted_MockReceivesNoSessions()
@@ -112,7 +140,7 @@ public class SessionPipelineTests : IDisposable
         Assert.Equal(RingState.NoSessions, lastWrite.State);
     }
 
-    // ── 4. Debounce test ─────────────────────────────────────────────────────
+    // ── 6. Debounce test ─────────────────────────────────────────────────────
 
     [Fact]
     public async Task Debounce_TenRapidPosts_MockReceivesAtMostTwoWrites()
@@ -132,7 +160,7 @@ public class SessionPipelineTests : IDisposable
             $"Expected ≤ 2 writes but got {_factory.MockWriter.WriteCount}.");
     }
 
-    // ── 5. Eviction test ─────────────────────────────────────────────────────
+    // ── 7. Eviction test ─────────────────────────────────────────────────────
     // Verifies that only the stale session is evicted and Ring State recomputes
     // from the remaining sessions rather than jumping straight to NoSessions.
 

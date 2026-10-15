@@ -61,10 +61,11 @@ static RingState parseLine(const char* line) {
     const char* state = doc["state"];
     // "tool" field is present for future use — ignored in v1
 
-    if (strcmp(state, "blocked") == 0)     return RingState::BLOCKED;
-    if (strcmp(state, "working") == 0)     return RingState::WORKING;
-    if (strcmp(state, "idle") == 0)        return RingState::IDLE;
-    if (strcmp(state, "no-sessions") == 0) return RingState::NO_SESSIONS;
+    if (strcmp(state, "blocked") == 0)        return RingState::BLOCKED;
+    if (strcmp(state, "working") == 0)        return RingState::WORKING;
+    if (strcmp(state, "working-stale") == 0)  return RingState::WORKING_STALE;
+    if (strcmp(state, "idle") == 0)           return RingState::IDLE;
+    if (strcmp(state, "no-sessions") == 0)    return RingState::NO_SESSIONS;
 
     return RingState::UNKNOWN; // unrecognised state value
 }

@@ -32,6 +32,7 @@ public class ConfigLoaderTests : IDisposable
         Assert.Equal(10, config.StaleTimeoutMinutes);
         Assert.Equal("#0044FF", config.NoSessionsColor);
         Assert.Equal(57491, config.HttpPort);
+        Assert.Equal("Information", config.LogLevel);
     }
 
     // ── Values from file ─────────────────────────────────────────────────────
@@ -43,7 +44,8 @@ public class ConfigLoaderTests : IDisposable
             {
                 "staleTimeoutMinutes": 20,
                 "noSessionsColor": "#FF0000",
-                "httpPort": 12345
+                "httpPort": 12345,
+                "logLevel": "Debug"
             }
             """);
 
@@ -52,6 +54,7 @@ public class ConfigLoaderTests : IDisposable
         Assert.Equal(20, config.StaleTimeoutMinutes);
         Assert.Equal("#FF0000", config.NoSessionsColor);
         Assert.Equal(12345, config.HttpPort);
+        Assert.Equal("Debug", config.LogLevel);
     }
 
     // ── Forward compatibility ─────────────────────────────────────────────────

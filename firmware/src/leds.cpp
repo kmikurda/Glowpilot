@@ -1,11 +1,12 @@
 // Glowpilot — LED ring renderer
 //
 // Animations per ring state:
-//   WORKING     — spinning dot with 2-LED trailing tail (amber, clockwise)
-//   BLOCKED     — fast sinusoidal pulse, all LEDs (red — signals user action needed)
-//   IDLE        — solid, all LEDs (green — done, waiting for input)
-//   NO_SESSIONS — slow sinusoidal pulse, all LEDs (blue)
-//   BOOT        — slow sinusoidal pulse, all LEDs (blue, before first connection)
+//   WORKING       — spinning dot with 2-LED trailing tail (amber, clockwise)
+//   WORKING_STALE — slow sinusoidal pulse, all LEDs (amber — working but no activity >30s)
+//   BLOCKED       — fast sinusoidal pulse, all LEDs (red — signals user action needed)
+//   IDLE          — solid, all LEDs (green — done, waiting for input)
+//   NO_SESSIONS   — slow sinusoidal pulse, all LEDs (blue)
+//   BOOT          — slow sinusoidal pulse, all LEDs (blue, before first connection)
 //
 // State changes trigger a per-LED cross-fade from the previous output snapshot.
 
@@ -58,6 +59,18 @@ static void computeTarget(CRGB* out) {
                     out[i] = CRGB::Black;                               // dark
                 }
             }
+            break;
+        }
+
+        case RingState::WORKING_STALE: {
+            // Slow sinusoidal pulse — same amber as WORKING, but no spinning.
+            // Visually distinct from the active spin: signals "agent is paused, likely waiting for user".
+            float phase      = (float)(millis() % STALE_PERIOD_MS) / (float)STALE_PERIOD_MS;
+            float brightness = 0.1f + 0.9f * (0.5f + 0.5f * sinf(phase * 2.0f * (float)M_PI));
+            CRGB  c = CRGB((uint8_t)(base.r * brightness),
+                           (uint8_t)(base.g * brightness),
+                           (uint8_t)(base.b * brightness));
+            for (uint8_t i = 0; i < LED_COUNT; i++) out[i] = c;
             break;
         }
 

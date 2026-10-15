@@ -434,7 +434,7 @@ function Invoke-GlowpilotInstall {
         Write-Host '       Installation succeeded but the service may still be starting.' -ForegroundColor Yellow
         Write-Host '       Diagnostics:' -ForegroundColor Yellow
         Write-Host '         Get-ScheduledTaskInfo -TaskName Glowpilot' -ForegroundColor Yellow
-        Write-Host '         Get-EventLog -LogName Application -Source Glowpilot -Newest 10' -ForegroundColor Yellow
+        Write-Host '         Get-Content "$env:LOCALAPPDATA\Glowpilot\logs\service.log" -Tail 50' -ForegroundColor Yellow
     }
 
     Write-Host ''

@@ -11,6 +11,9 @@ public enum RingState
     [JsonStringEnumMemberName("working")]
     Working,
 
+    [JsonStringEnumMemberName("working-stale")]
+    WorkingStale,
+
     [JsonStringEnumMemberName("idle")]
     Idle,
 

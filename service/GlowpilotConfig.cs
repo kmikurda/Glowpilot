@@ -16,10 +16,23 @@ public sealed record GlowpilotConfig : ISessionMapConfig
     public int IdleStaleTimeoutSeconds { get; init; } = 300;
 
     /// <inheritdoc />
+    public int WorkingStaleTimeoutSeconds { get; init; } = 30;
+
+    /// <inheritdoc />
+    public int BlockedDebounceSeconds { get; init; } = 3;
+
+    /// <inheritdoc />
     public string NoSessionsColor { get; init; } = "#0044FF";
 
     /// <summary>TCP port on which the Service HTTP server listens.</summary>
     public int HttpPort { get; init; } = 57491;
+
+    /// <summary>
+    /// Minimum level written to the log file: Trace, Debug, Information, Warning, Error,
+    /// Critical or None. Unrecognised values fall back to Information
+    /// (see <see cref="FileLoggerProvider.ParseLevel"/>).
+    /// </summary>
+    public string LogLevel { get; init; } = "Information";
 }
 
 /// <summary>
